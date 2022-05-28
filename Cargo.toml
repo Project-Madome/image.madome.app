@@ -1,0 +1,27 @@
+[package]
+name = "madome-image"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+async-trait = "0.1"
+hyper = { version = "0.14", features = ["server", "http1", "tcp"] }
+tokio = { version = "1.18", features = ["macros", "rt", "rt-multi-thread", "fs", "signal", "sync", "io-util"] }
+sai = "0.1.4"
+dotenv = "0.15.0"
+log = "0.4.17"
+hyper-staticfile = "0.9.0"
+serde = "1.0.137"
+serde_json = "1.0.81"
+futures = "0.3.21"
+either = { version = "1.6.1", features = ["serde"] }
+inspect = { git = "https://github.com/syrflover/inspect-rs" }
+thiserror = "1.0.31"
+simple_logger = "2.1.0"
+refract_core = { git = "https://github.com/Blobfolio/refract", features = ["decode_ng"], tag = "v0.8.6" }
+# refract_core = { git = "https://github.com/syrflover/refract", features = ["decode_ng"], branch = "perf" }
+# refract_core = { path = "../refract/refract_core", features = ["decode_ng"] }
+util = { git = "https://github.com/syrflover/util-rs", tag = "0.3.3" }
+# util = { path = "../util" }
