@@ -13,7 +13,6 @@ use hyper::{
 };
 use hyper_staticfile::Static;
 use inspect::{Inspect, InspectOk};
-use refract_core::{ImageKind, FLAG_NO_LOSSLESS, FLAG_NO_LOSSY};
 use sai::{Component, ComponentLifecycle, Injected};
 use serde::Serialize;
 use tokio::{
@@ -21,11 +20,7 @@ use tokio::{
     io::AsyncWriteExt,
     sync::oneshot,
 };
-use util::{
-    elapse,
-    http::{multipart::Multipart, SetResponse},
-    ReadChunks,
-};
+use util::{elapse, http::multipart::Multipart};
 
 use crate::config::Config;
 
@@ -91,16 +86,16 @@ async fn handler(
         }
 
         (Method::GET, _uri_path) => {
-            let mut resp = r#static.clone().serve(request).await?;
+            r#static.clone().serve(request).await?
 
-            let content_type = resp
-                .headers()
-                .get(header::CONTENT_TYPE)
-                .and_then(|x| x.to_str().ok())
-                .unwrap_or_default();
+            /* let content_type = resp
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|x| x.to_str().ok())
+            .unwrap_or_default(); */
 
             // avif to webp
-            if content_type.contains("image/avif") {
+            /* if content_type.contains("image/avif") {
                 let body = resp.body_mut();
 
                 let buf = body.read_chunks().await.unwrap();
@@ -178,7 +173,7 @@ async fn handler(
                 resp
             } else {
                 resp
-            }
+            } */
         }
 
         (Method::PUT, uri_path) => {
