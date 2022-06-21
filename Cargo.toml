@@ -21,7 +21,11 @@ inspect = { git = "https://github.com/syrflover/inspect-rs" }
 thiserror = "1.0.31"
 simple_logger = "2.1.0"
 # refract_core = { git = "https://github.com/Blobfolio/refract", features = ["decode_ng"], tag = "v0.8.6" }
-# refract_core = { git = "https://github.com/syrflover/refract", features = ["decode_ng"], branch = "perf" }
+refract_core = { git = "https://github.com/syrflover/refract", features = ["decode_ng"], branch = "perf" }
 # refract_core = { path = "../refract/refract_core", features = ["decode_ng"] }
-util = { git = "https://github.com/syrflover/util-rs", tag = "0.3.3" }
+util = { git = "https://github.com/syrflover/util-rs", tag = "0.4.2" }
+# util = { path = "../util/util" }
+http-util = { git = "https://github.com/syrflover/util-rs", tag = "0.4.2", features = ["server"] }
+# http-util = { path = "../util/http-util", features = ["server"] }
+reqwest = "0.11.11"
 # util = { path = "../util" }

@@ -6,13 +6,15 @@ use std::{
 };
 
 use either::Either;
+use http_util::{Multipart, ReadChunks, SetResponse};
 use hyper::{
     header,
     service::{make_service_fn, service_fn},
-    Body, Method, Request, Response, Server, StatusCode,
+    Body, HeaderMap, Method, Request, Response, Server, StatusCode,
 };
 use hyper_staticfile::Static;
 use inspect::{Inspect, InspectOk};
+use refract_core::{ImageKind, FLAG_NO_LOSSLESS};
 use sai::{Component, ComponentLifecycle, Injected};
 use serde::Serialize;
 use tokio::{
@@ -20,9 +22,32 @@ use tokio::{
     io::AsyncWriteExt,
     sync::oneshot,
 };
-use util::{elapse, http::multipart::Multipart};
+use util::elapse;
 
 use crate::config::Config;
+
+async fn auth(headers: &HeaderMap) -> crate::Result<()> {
+    let cookie = headers
+        .get(header::COOKIE)
+        .ok_or(crate::Error::Unauthenticated)?;
+
+    let resp = reqwest::Client::new()
+        .get("https://test.api.madome.app/auth/token")
+        .header(header::COOKIE, cookie)
+        .send()
+        .await?;
+
+    match resp.status() {
+        StatusCode::OK => Ok(()),
+
+        StatusCode::UNAUTHORIZED => Err(crate::Error::Unauthenticated),
+
+        code => Err(crate::Error::UnknownStatusCode(
+            code,
+            resp.text().await.unwrap_or_default(),
+        )),
+    }
+}
 
 #[derive(Component)]
 #[lifecycle]
@@ -40,13 +65,20 @@ async fn handler(
     mut request: Request<Body>,
     r#static: Static,
 ) -> crate::Result<Response<Body>> {
+    auth(request.headers()).await?;
+
     // remove first slash character
     let uri_path = {
         while let Some('/') = uri_path.chars().next() {
             uri_path.remove(0);
         }
 
-        uri_path
+        // compatible from old api
+        if uri_path.starts_with("v1") {
+            uri_path.replace("v1", "")
+        } else {
+            uri_path
+        }
     };
 
     let resp = match (method, uri_path) {
@@ -86,16 +118,16 @@ async fn handler(
         }
 
         (Method::GET, _uri_path) => {
-            r#static.clone().serve(request).await?
+            let mut resp = r#static.clone().serve(request).await?;
 
-            /* let content_type = resp
-            .headers()
-            .get(header::CONTENT_TYPE)
-            .and_then(|x| x.to_str().ok())
-            .unwrap_or_default(); */
+            let content_type = resp
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .and_then(|x| x.to_str().ok())
+                .unwrap_or_default();
 
             // avif to webp
-            /* if content_type.contains("image/avif") {
+            if content_type.contains("image/avif") {
                 let body = resp.body_mut();
 
                 let buf = body.read_chunks().await.unwrap();
@@ -124,15 +156,10 @@ async fn handler(
 
                             */
 
-                // TODO: refract error handle
-                // TODO: improve performance
-
-                let input =
-                    refract_core::Input::try_from(buf.as_slice()).expect("load image buffer");
+                let input = refract_core::Input::try_from(buf.as_slice())?;
 
                 let mut it =
-                    refract_core::EncodeIter::new(&input, ImageKind::Webp, FLAG_NO_LOSSLESS)
-                        .unwrap();
+                    refract_core::EncodeIter::new(&input, ImageKind::Webp, FLAG_NO_LOSSLESS)?;
 
                 // consume
                 // while let Some(_) = it.advance() {}
@@ -144,7 +171,7 @@ async fn handler(
                     }
                 } */
 
-                let r = it.advance().unwrap();
+                let _r = it.advance().unwrap();
 
                 // let r = it.candidate().unwrap();
 
@@ -173,7 +200,7 @@ async fn handler(
                 resp
             } else {
                 resp
-            } */
+            }
         }
 
         (Method::PUT, uri_path) => {
@@ -240,13 +267,15 @@ async fn service(request: Request<Body>, r#static: Static) -> Result<Response<Bo
     match response {
         Ok(response) => Ok(response),
         Err(err) => {
-            // FIXME: error to response, not internal server error
+            let code = match err {
+                crate::Error::Unauthenticated => StatusCode::UNAUTHORIZED,
+                crate::Error::UnknownStatusCode(code, _) => code,
+                _ => StatusCode::INTERNAL_SERVER_ERROR,
+            };
+
             let err = err.inspect(|e| log::error!("{}", e)).to_string().into();
 
-            let resp = Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(err)
-                .unwrap();
+            let resp = Response::builder().status(code).body(err).unwrap();
 
             Ok(resp)
         }
