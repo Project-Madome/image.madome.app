@@ -2,6 +2,7 @@ use std::{
     convert::Infallible,
     ffi::OsString,
     net::SocketAddr,
+    sync::Arc,
     time::{Duration, SystemTime},
 };
 
@@ -10,13 +11,13 @@ use http_util::{Multipart, ReadChunks, SetResponse};
 use hyper::{
     header,
     service::{make_service_fn, service_fn},
-    Body, HeaderMap, Method, Request, Response, Server, StatusCode,
+    Body, Method, Request, Response, Server, StatusCode, Uri,
 };
 use hyper_staticfile::Static;
 use inspect::{Inspect, InspectOk};
 use refract_core::{ImageKind, FLAG_NO_LOSSLESS};
 use sai::{Component, ComponentLifecycle, Injected};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::{
     fs::{self, File},
     io::AsyncWriteExt,
@@ -26,16 +27,46 @@ use util::elapse;
 
 use crate::config::Config;
 
-async fn auth(headers: &HeaderMap) -> crate::Result<()> {
-    let cookie = headers
-        .get(header::COOKIE)
-        .ok_or(crate::Error::Unauthenticated)?;
+async fn auth<B>(config: Arc<Config>, request: &Request<B>) -> crate::Result<()> {
+    #[derive(Deserialize)]
+    struct Query<'a> {
+        #[serde(rename = "madome-2022")]
+        madome_2022: Option<&'a str>,
+    }
 
-    let resp = reqwest::Client::new()
-        .get("https://test.api.madome.app/auth/token")
-        .header(header::COOKIE, cookie)
-        .send()
-        .await?;
+    let query: Query = serde_qs::from_str(request.uri().query().unwrap_or_default()).unwrap();
+    let headers = request.headers();
+
+    let resp = match query.madome_2022.is_some() || headers.get("X-Madome-2022").is_some() {
+        true => {
+            let url = format!("{}/auth/token", config.auth_url());
+
+            let cookie = headers
+                .get(header::COOKIE)
+                .ok_or(crate::Error::Unauthenticated)?;
+
+            reqwest::Client::new()
+                .get(url)
+                .header(header::COOKIE, cookie)
+                .send()
+                .await?
+        }
+
+        false => {
+            let url = format!("{}/v1/auth/token", config.old_auth_url());
+
+            let token = headers
+                .get(header::AUTHORIZATION)
+                .and_then(|x| x.to_str().ok())
+                .ok_or(crate::Error::Unauthenticated)?;
+
+            reqwest::Client::new()
+                .get(url)
+                .header(header::AUTHORIZATION, token)
+                .send()
+                .await?
+        }
+    };
 
     match resp.status() {
         StatusCode::OK => Ok(()),
@@ -60,26 +91,41 @@ pub struct HttpServer {
 }
 
 async fn handler(
+    config: Arc<Config>,
     method: Method,
-    mut uri_path: String,
     mut request: Request<Body>,
     r#static: Static,
 ) -> crate::Result<Response<Body>> {
-    auth(request.headers()).await?;
+    auth(config, &request).await?;
 
-    // remove first slash character
-    let uri_path = {
+    let uri = request.uri();
+    let mut uri_path = uri
+        .path_and_query()
+        .map(|x| x.as_str())
+        .unwrap_or_else(|| uri.path());
+    let uri: Uri = {
+        // remove first slash character
         while let Some('/') = uri_path.chars().next() {
-            uri_path.remove(0);
+            // uri_path.remove(0);
+            uri_path = &uri_path[1..];
         }
 
-        // compatible from old api
-        if uri_path.starts_with("v1") {
-            uri_path.replace("v1", "")
-        } else {
-            uri_path
-        }
+        log::debug!("uri_path = {uri_path}");
+
+        /* // compatible from old api
+        let uri_path = match uri_path.strip_prefix("v1/") {
+            Some(x) => {
+                uri_path = x;
+                x
+            }
+            None => uri_path,
+        }; */
+
+        ("/".to_string() + uri_path).parse().unwrap()
     };
+
+    log::debug!("uri.path = {}", uri.path());
+    log::debug!("uri_path = {}", uri_path);
 
     let resp = match (method, uri_path) {
         (Method::GET, uri_path) if uri_path.ends_with("image_list") => {
@@ -245,7 +291,11 @@ async fn handler(
     Ok(resp)
 }
 
-async fn service(request: Request<Body>, r#static: Static) -> Result<Response<Body>, Infallible> {
+async fn service(
+    config: Arc<Config>,
+    request: Request<Body>,
+    r#static: Static,
+) -> Result<Response<Body>, Infallible> {
     let req_method = request.method().to_owned();
     let req_path = request.uri().path().to_string();
 
@@ -255,7 +305,7 @@ async fn service(request: Request<Body>, r#static: Static) -> Result<Response<Bo
 
     let response = elapse!(
         "execute",
-        handler(req_method.clone(), req_path.clone(), request, r#static).await
+        handler(config, req_method.clone(), request, r#static).await
     );
 
     let end = start
@@ -302,19 +352,22 @@ impl ComponentLifecycle for HttpServer {
         self.stop_sender.replace(stop_tx);
         self.stopped_receiver.replace(stopped_rx);
 
+        let config = Arc::clone(&self.config);
         let r#static = Static::new(self.config.base_path());
 
         let port = self.config.port();
         let addr = SocketAddr::from(([0, 0, 0, 0], port));
 
         tokio::spawn(async move {
-            let svc = |r#static: Static| async move {
+            let svc = |config: Arc<Config>, r#static: Static| async move {
                 Ok::<_, Infallible>(service_fn(move |request| {
-                    service(request, r#static.clone())
+                    service(config.clone(), request, r#static.clone())
                 }))
             };
 
-            let server = Server::bind(&addr).serve(make_service_fn(move |_| svc(r#static.clone())));
+            let server = Server::bind(&addr).serve(make_service_fn(move |_| {
+                svc(config.clone(), r#static.clone())
+            }));
 
             let server = Server::with_graceful_shutdown(server, async {
                 stop_rx.await.unwrap();

@@ -7,6 +7,8 @@ use sai::{Component, ComponentLifecycle};
 pub struct Config {
     port: u16,
     base_path: PathBuf,
+    auth_url: String,
+    old_auth_url: String,
 }
 
 #[async_trait::async_trait]
@@ -33,5 +35,13 @@ impl Config {
 
     pub fn base_path(&self) -> PathBuf {
         self.base_path.clone()
+    }
+
+    pub fn auth_url(&self) -> &str {
+        self.auth_url.as_str()
+    }
+
+    pub fn old_auth_url(&self) -> &str {
+        self.old_auth_url.as_str()
     }
 }
